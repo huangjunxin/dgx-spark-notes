@@ -1,0 +1,54 @@
+# ===== 当前生效配置 (2026-09-09 21:48 部署, 迁移自 vLLM/ornith -> SGLang/Qwen3.8-27B) =====
+# 用户侧: 模型名 ornith-local -> qwen3.8-27b (地址/端口/auth/协议全不变)
+# 灰度: ornith-local 暂时也指向新模型 (待 1-2 周后删除该 route)
+schema_version = 1
+
+[llm_clients.vllm_ornith]            # 保留: 回滚时旧后端就绪即可秒切
+format = "openai_chat"
+base_url = "http://localhost:8888/v1"
+api_key_env = "VLLM_API_KEY"
+
+[llm_clients.sglang_qwen38]
+format = "openai_chat"
+base_url = "http://localhost:8888/v1"   # 端口不变, 后端从 vLLM 换成 SGLang
+api_key_env = "VLLM_API_KEY"
+
+[llm_clients.openrouter]             # 云路由不动
+format = "openai_chat"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[targets.ornith]                     # 保留(回滚用)
+id = "ornith-1.5-35b-a3b-nvfp4"
+llm_client = "vllm_ornith"
+
+[targets.qwen38]
+id = "qwen3.8-27b"                   # 必须与 SGLang --served-model-name 完全一致
+llm_client = "sglang_qwen38"
+
+[targets.openrouter_strong]
+id = "deepseek/deepseek-v4-flash"
+llm_client = "openrouter"
+
+[routes.ornith_local]                # 灰度期: 旧模型名也打到新模型, 让没改配置的客户端无感
+id = "ornith-local"
+type = "passthrough"
+target = "qwen38"                    # ← 灰度期指向新后端; 1-2 周后删掉整个 route
+
+[routes.qwen_local]
+id = "qwen3.8-27b"                   # 新模型名
+type = "passthrough"
+target = "qwen38"
+
+[routes.cloud_test]
+id = "cloud-test"
+type = "passthrough"
+target = "openrouter_strong"
+
+[routes.smart]                       # 智能路由的"便宜档"换成新模型, 云路由保留
+id = "switchyard"
+type = "stage_router"
+efficient_target = "qwen38"
+capable_target = "openrouter_strong"
+picker = "efficient_first"
+confidence_threshold = 0.05
