@@ -22,6 +22,23 @@
 
 ---
 
+## 0. 当前状态速览（2026-09-10 更新）
+
+| 项 | 值 |
+|---|---|
+| 主服务 | 容器 `qwen38-27b-sglang`，镜像 `lmsysorg/sglang:dev-qwen38-27b-dflash2`（SGLang `0.0.0.dev1+g5f55db35e`） |
+| 模型 | `RadixArk/Qwen3.8-27B-NVFP4`（27B 稠密混合 GDN，NVFP4）+ 草稿 `z-lab/Qwen3.8-27B-DFlash2` |
+| 投机解码 | **DFlash2**（block 8 / 8 draft tokens）；上一版是 DSpark，可回滚 |
+| 上下文 | **1,010,000** token（原生 262,144；YaRN factor 4.0 写进 config.json） |
+| 监听 | `127.0.0.1:8888`（host 网络）→ 经 `vllm-open-proxy.py` 对外；switchyard `0.0.0.0:4000` 为用户入口 |
+| 启动 | `cd qwen38-sglang && IMAGE=lmsysorg/sglang:dev-qwen38-27b-dflash2 ALGO=DFLASH CONTEXT_LENGTH=1010000 ./start-dspark-long.sh` |
+| 回滚 | `./stop.sh && ./start.sh`（回到 SGLang+DSpark+262K）；DSpark 长上下文：`CONTEXT_LENGTH=506000 ./start-dspark-long.sh` |
+| 细节 | 见 [qwen38-sglang/LONG-CONTEXT-CUTOVER.md](qwen38-sglang/LONG-CONTEXT-CUTOVER.md) 与 [qwen38-sglang/LONG-CONTEXT-RESEARCH.md](qwen38-sglang/LONG-CONTEXT-RESEARCH.md)，踩坑清单见 §8.3 |
+
+> 注：§1-§7 为 ornith 时期（2026-08）原文，保留备查。
+
+---
+
 ## 1. 当前运行的模型服务
 
 | 项目 | 值 |
