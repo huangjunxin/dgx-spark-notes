@@ -16,6 +16,7 @@
 | 2026-08-25 | 评估 Qwen3.8-27B(SGLang) 能否替代 ornith：当时结论"保持现状"（后被 9/9 的实际切换推翻） | [notes/qwen38-27b-alternative-eval.md](notes/qwen38-27b-alternative-eval.md) |
 | 2026-09-09 | **主服务切换到 Qwen3.8-27B（SGLang + DSpark 投机解码）**，用户侧仅 model 名变化 | [qwen38-sglang/DEPLOYMENT-RECORD.md](qwen38-sglang/DEPLOYMENT-RECORD.md) · [MIGRATION-NOTES.md](qwen38-sglang/MIGRATION-NOTES.md) · [CUTOVER.md](qwen38-sglang/CUTOVER.md) |
 | 2026-09-10 | 判官 :8889 关停（内存压力 + 16 天无调用方） | [notes/LOCAL-JUDGE-LESSONS.md](notes/LOCAL-JUDGE-LESSONS.md) §7 |
+| 2026-09-10 | **上下文 262K → 1M**：解决 YaRN 与投机解码草稿的参数污染冲突，上线 **DFlash2 + 1,010,000**（另备 DSpark + 506,000 路线）；含 11 条踩坑 | [notes/qwen38-long-context-1m.md](notes/qwen38-long-context-1m.md) · [qwen38-sglang/LONG-CONTEXT-CUTOVER.md](qwen38-sglang/LONG-CONTEXT-CUTOVER.md) · [RESEARCH](qwen38-sglang/LONG-CONTEXT-RESEARCH.md) |
 
 ## 当前服务速览（记录时点 2026-09-10）
 
@@ -42,6 +43,7 @@ dgx-spark-notes/
 │   ├── judge-pk-result.md             # 判官 PK：MiniCPM5-1B vs Qwen3-8B-AWQ（85% 胜）
 │   ├── ornith-memory-optimization.md  # ornith util 0.85→0.65 内存优化
 │   ├── qwen38-27b-alternative-eval.md # Qwen3.8-27B(SGLang) 替代评估（2026-08-25）
+│   ├── qwen38-long-context-1m.md      # ★ 长上下文 262K->1M 完整记录 + 11 条踩坑（2026-09-10）
 │   └── ollama-uninstall-worklog.md    # Ollama 卸载调查（46GB 模型清理）
 ├── Ornith-1.5-35B-A3B-DGX-Spark/      # 旧主服务部署记录（vLLM + b12x 内核补丁）
 │   ├── DEPLOYMENT.md                  # 部署全流程：前置条件/步骤/踩坑/运维
@@ -51,6 +53,13 @@ dgx-spark-notes/
 │   ├── DEPLOYMENT-RECORD.md           # ★ 首读：部署全流程（参数/执行/验证/运维/回滚）
 │   ├── MIGRATION-NOTES.md             # 切换前调研 + 现状核查 + 修正备忘
 │   ├── CUTOVER.md                     # 切换/回滚 runbook
+│   ├── LONG-CONTEXT-CUTOVER.md        # ★ 长上下文切换记录（262144 -> 1010000，含三臂实测对比）
+│   ├── LONG-CONTEXT-RESEARCH.md       # 长上下文调研（官方配方/社区方案/逐条裁决，12 节）
+│   ├── start-long.sh                  # 长上下文启动脚本 A：YaRN 覆盖 + 原生 MTP
+│   ├── start-dspark-long.sh           # 长上下文启动脚本 B：三模式（draftmaxpos/draftyarn/yarn）+ ALGO=DFLASH 支线
+│   ├── make-yarn-variant.py           # 生成 target/draft 软链变体（内联 YaRN / 草稿 rope overlay，零拷贝）
+│   ├── bench-long-ctx.py              # 大海捞针验证（真实 prompt_tokens / TTFT / 命中）
+│   ├── verify-*.py                    # 零停机预检（复现参数污染崩溃 + 各变体能否加载）
 │   └── start.sh / stop.sh / bench.py / routes.toml.next
 └── scripts/                           # 判官相关脚本（start-judge-* / swap-ornith-util / test-judge-schema）
 ```

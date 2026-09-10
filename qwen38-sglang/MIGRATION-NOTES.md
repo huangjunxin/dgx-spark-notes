@@ -70,8 +70,8 @@ vllm serve /root/.cache/huggingface/hub/models--ornith-ai--Ornith-1.5-35B-A3B-NV
 ### 2.1 原文命令（备查）
 ```
 docker run -d --gpus all --name qwen38-27b --shm-size 32g -p 30000:30000
-  -v /home/<原作者>/.cache/modelscope/hub/models/RadixArk/Qwen3.8-27B-NVFP4:/models/main-model
-  -v /home/<原作者>/.cache/modelscope/hub/models/RadixArk/Qwen3.8-27B-DSpark:/models/draft-model
+  -v /home/hudson/.cache/modelscope/hub/models/RadixArk/Qwen3.8-27B-NVFP4:/models/main-model
+  -v /home/hudson/.cache/modelscope/hub/models/RadixArk/Qwen3.8-27B-DSpark:/models/draft-model
   --ipc=host
   lmsysorg/sglang:qwen38-27b
   sglang serve --trust-remote-code --served-model-name Qwen3.8-27B
@@ -107,7 +107,7 @@ docker run -d --gpus all --name qwen38-27b --shm-size 32g -p 30000:30000
 | `--mamba-radix-cache-strategy extra_buffer`(S=5) | ⚠️ 可改 | 同硬件实测更优: extra_buffer_lazy (S=4) |
 | `--speculative-draft-attention-backend flashinfer` | ⚠️ 可能报错 | 该旗标一般用于 EAGLE 系; 主 `--attention-backend flashinfer` 已覆盖 (SM121 上 flashinfer 是必须的, ✅) |
 | 端口 30000 + `-p` 映射 | ❌ 增改动 | 会迫使改 switchyard base_url 和 TCP 代理; 应 host网络 + 127.0.0.1:8888 |
-| 挂载 /home/<原作者>/... | ❌ 本机无此路径 | 需改本机预下载缓存 (最终用 /home/<user>/projects/qwen38-model-cache) |
+| 挂载 /home/hudson/... | ❌ 本机无此路径 | 需改本机预下载缓存 (最终用 /home/<user>/projects/qwen38-model-cache) |
 | `--mem-fraction-static 0.85` | ⚠️ 非实测值 | DSPARK 实测配方 0.90 |
 | `--chunked-prefill-size 4096` | ⚠️ 非实测值 | 实测配方 8192 |
 | 无 torch.compile / cuda-graph / 连续decode步数 | ⚠️ 缺优化 | 同硬件实测会加: --enable-torch-compile --torch-compile-max-bs 4 --cuda-graph-max-bs-decode 4 --num-continuous-decode-steps 2 |
