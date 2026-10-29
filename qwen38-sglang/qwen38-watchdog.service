@@ -1,0 +1,27 @@
+# qwen38-watchdog.service — 主服务容器 qwen38-27b-sglang 的 探活 + 自愈 + 告警 守护
+#
+# 安装（用户级 systemd，本机已开 Linger，无需登录即在跑）:
+#   install -m644 ~/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now qwen38-watchdog.service
+# 查看:
+#   systemctl --user status qwen38-watchdog
+#   journalctl --user -u qwen38-watchdog -f
+#   ~/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.sh --status
+# 配置（可选，全部有默认值）: ~/.config/qwen38-watchdog.env
+# 复盘: %h/projects/dgx-spark-notes/notes/qwen38-dflash2-crash-20260915.md
+
+[Unit]
+Description=Qwen3.8-27B (SGLang) watchdog — health check + auto-heal + alert
+Documentation=file:%h/projects/dgx-spark-notes/notes/qwen38-dflash2-crash-20260915.md
+After=default.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/qwen38-watchdog.env
+ExecStart=/bin/bash %h/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.sh --run
+# watchdog 自己挂了也让 systemd 拉起来
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

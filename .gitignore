@@ -1,4 +1,19 @@
+# gitignore — dgx-spark-notes
 *.log
 __pycache__/
 *.pyc
 .DS_Store
+
+# 历史快照不入库（仓库自身的旧拷贝，见 archive/README.md）
+archive/*
+!archive/README.md
+
+# 回滚快照（本地保留，不入库；回滚时手动 mv 回来）
+*.bak-*
+
+# 实验运行产物：缓存/测试输入输出（只保留脚本与文档）
+.vllm-cache/
+out*/
+*.ses
+experiments/**/*.pdf
+experiments/**/*.png

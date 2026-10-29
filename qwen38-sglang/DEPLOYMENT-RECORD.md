@@ -1,6 +1,9 @@
 # Qwen3.8-27B 部署全流程记录（SGLang + DSpark, DGX Spark GB10）
 > 部署时间: 2026-09-09 21:36 - 21:50 (HKT)  状态: ✅ 已上线运行
 > 本文档为完整部署记录: 环境 -> 准备 -> 执行 -> 验证 -> 运维 -> 回滚, 含全部命令与实测结果。
+>
+> ⚠️ **2026-09-18 更新（照抄前必读）**：本文是 **2026-09-09 首版部署**（DSpark + 262K）的现场记录。现役形态已变：**DFlash2 + 1,010,000 上下文**（参数见 [dgx-spark-model-service.md](../dgx-spark-model-service.md) §8.1 / [LONG-CONTEXT-CUTOVER.md](LONG-CONTEXT-CUTOVER.md)），
+> 且**并发上限已从 8 收到 `--max-running-requests 4`**（+ mamba 池按 并发×12；DFlash2 草稿采样器缓冲区按 decode CUDA graph 的 bs=4 分配，并发 8 时 bs≥5 必崩）——本文中的 `MAX_CONCURRENT_REQUESTS=8` 与 `并发 x 4` 的池算法都是首版值，**不要直接照抄**。定案与验证：[notes/qwen38-dflash2-crash-20260918.md](../notes/qwen38-dflash2-crash-20260918.md)。
 
 ## 1. 目标
 将现网 ornith 模型（vLLM, Ornith-1.5-35B-A3B-NVFP4）切换为 Qwen3.8-27B（SGLang + DSpark 投机解码），

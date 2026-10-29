@@ -4,6 +4,14 @@
 > 现役结果: ✅ **DFlash2 + 上下文 1,010,000**，实测 **652,137 token 召回正确**，吞吐与 262K 基线持平
 > 备用结果: ✅ **DSpark + 506,000**（不换算法，只换 config），实测 310K / 466K 召回正确
 
+> ⚠️ **2026-09-15 更新：现役 DFlash2 形态不稳定** —— 已两次崩溃（`dflash_worker_v2.py` 采样器 `greedy_mask` batch 尺寸 bug，scheduler 异常 → 容器 **exit 0**），
+> 详见 [../notes/qwen38-dflash2-crash-20260915.md](../notes/qwen38-dflash2-crash-20260915.md)。当前选择：暂不切形态，靠 `--restart unless-stopped` + watchdog + 告警扛着；
+> 若进入崩溃循环（1 小时 ≥3 次），按本文路线回 **DSpark + 506K** 或 **MTP + 262K**。
+
+> ✅ **2026-09-18 更新：已定案并修复，无需切形态。** 该 bug 的真身是**并发上限（8）与 decode CUDA graph 的 bs（4）不匹配** —— 草稿采样器缓冲区按 graph max bs=4 分配，decode batch ≥5 即越界崩溃；09-15 的 `a(4) vs b(7)` 与本轮 `a(4) vs b(5)` 是同一个等式。触发链：长上下文风暴 → 排队 → 并发顶到 5~6 → 崩。**纯重启无效**（09-17 恢复后 2 分 16 秒即复发）。
+> 修复 = `--max-running-requests 8 → 4`（+ mamba 池 96→48），重建容器生效；8 并发压测通过（running 峰值恰好 4、8/8 全 200、`Scheduler hit an exception`=0）。
+> 详见 [../notes/qwen38-dflash2-crash-20260918.md](../notes/qwen38-dflash2-crash-20260918.md)。本文 §8 的备用形态（DSpark 506K / MTP 262K）继续留作"要恢复 8 并发又不想动 graph bs"之外的退路。
+
 ---
 
 ## 0. 先看这个：两条可用路线
@@ -69,7 +77,7 @@ IMAGE=lmsysorg/sglang:dev-qwen38-27b-dflash2 ALGO=DFLASH CONTEXT_LENGTH=1010000 
 | `--disable-flashinfer-autotune` | 长上下文自动加 | 同上，autotuner 是瞬时分配大户 |
 | `-e HF_HUB_OFFLINE=1` | 是 | 防止 Hub 重新解析把打过补丁的 config 覆盖回去 |
 | `--mamba-radix-cache-strategy` | DFLASH → `extra_buffer`（DSPARK → `extra_buffer_lazy`） | **DFLASH 不支持 lazy**，引擎会断言失败；脚本按算法自动切 |
-| `--max-mamba-cache-size` | 96（并发 8 x 12） | hasso 现场值 |
+| `--max-mamba-cache-size` | **48（并发 4 x 12）** | hasso 现场值（原 96 = 并发 8 x 12）；**2026-09-18 随并发上限下调**，见文首更新 |
 | 其余（flashinfer / fp8 KV / mamba bf16 / torch.compile / cpuset / reasoning+tool parser） | 与旧配置一致 | 行为不变 |
 
 ### 1.4 就绪自检

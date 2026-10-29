@@ -1,0 +1,17 @@
+[Unit]
+Description=Qwen3.8-27B 外部直连代理 (Tailscale/LAN :8888 -> 127.0.0.1:8888)
+Documentation=file:<home>/projects/README.md
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=<home>/projects
+ExecStart=/usr/bin/python3 <home>/projects/vllm-open-proxy.py
+Restart=always
+RestartSec=3
+# 崩溃/重启也要能自愈: 该代理无状态、纯 TCP 转发, 重启代价为零
+StandardOutput=append:<home>/projects/vllm-proxy.log
+StandardError=append:<home>/projects/vllm-proxy.log
+
+[Install]
+WantedBy=default.target

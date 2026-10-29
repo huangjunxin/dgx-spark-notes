@@ -248,7 +248,8 @@ HOST=0.0.0.0 ./start.sh   # 容器内 vllm 以 --host 0.0.0.0 启动
 | 关键 | `--json-model-override-args '{}'`（**绝不能传 YaRN 覆盖**，见 8.3 P1）+ `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1` |
 | 上下文 | `--context-length 1010000`（YaRN 上界 1048576，留 3.7% 余量，避免 verify 窗口越界） |
 | 内存 | `--mem-fraction-static 0.70` + docker `--memory/--memory-swap 100g` + `--disable-flashinfer-autotune` + `HF_HUB_OFFLINE=1` |
-| KV | fp8_e4m3，池 1,031,239 token；GDN 状态池 `extra_buffer` 96 槽（DFLASH 不支持 `extra_buffer_lazy`） |
+| KV | fp8_e4m3，池 1,031,239 token；GDN 状态池 `extra_buffer` **48 槽**（= 并发 × 12；DFLASH 不支持 `extra_buffer_lazy`。2026-09-18 前为 96 槽/并发 8，见下） |
+| 并发 | `--max-running-requests` **4** —— **2026-09-18 从 8 下调**，与 `--cuda-graph-max-bs-decode 4` 对齐，修掉 DFlash2 草稿采样器缓冲区越界（bs≥5 必崩）。定案与验证见 [事故复盘（续）](notes/qwen38-dflash2-crash-20260918.md) |
 | 实测 | bench 非思考 23.4 / 24.0 tok/s、思考 24.8 tok/s；大海捞针 **310,427 ✅ / 652,137 ✅**；冷 prefill 652K 约 32 分钟 |
 
 ### 8.2 结论
@@ -293,3 +294,47 @@ CONTEXT_LENGTH=506000 ./start-dspark-long.sh
 # 长文召回验证（以返回的 prompt_tokens 为准）
 python3 bench-long-ctx.py --ctx 1090000 --depth 0.1 --no-thinking
 ```
+---
+
+## 9. 运维护栏：探活 / 自愈 / 告警（2026-09-15 事故后上线）
+
+> 起因：2026-09-15 11:14 DFlash2 batch 尺寸 bug 让 scheduler 崩溃、容器 exit 0 静默停摆 66 分钟。
+> 完整复盘：[notes/qwen38-dflash2-crash-20260915.md](notes/qwen38-dflash2-crash-20260915.md)
+
+| 层 | 机制 | 关键点 |
+|---|---|---|
+| ① 容器 | `docker update --restart unless-stopped qwen38-27b-sglang` | 这类崩溃是 **exit 0**，`on-failure` 不会触发；实测该策略下 exit 0 也会被自动拉起 |
+| ② 应用 | `qwen38-sglang/qwen38-watchdog.sh`（systemd user 服务 `qwen38-watchdog`） | **告警要早，动作要晚，不确定就不动**。分级判定：`exited`（容器已退出）→ 2 min 后 `start`；`portdown`（端口无人监听=进程确已死）→ 3 min 后 `restart`；`unresponsive`（端口在监听但不应答=繁忙或假死，未定）→ **默认只告警**：10 min（`HUNG_GRACE`）先发 CRIT 预警、15 min（`HUNG_IDLE`）日志静默门槛到达才重启（`HUNG_RESTART=0` 可设永不重启）；阈值按实测日志空档标定（中位 11.2s / P95 179s / 最长 466s → 取 2× 余量）。实际动作时刻：空闲挂死 10 min、繁忙后挂死 ≥15 min（"日志静默"这条会被活动日志刷新）；`warming`（冷启动 20 min 内且未健康过）与**维护模式**一律只观察。动作前必先抓现场；限流 3 次/小时。随时 `--diag` 查看判定依据 |
+| ③ 告警 | `hermes send --to discord:<频道>`（复用 hermes 网关已配通道）+ journal + `~/.local/state/qwen38-watchdog/alerts.log` | **事件驱动、沉默即健康（2026-10-29 降噪后）**。告警点：达 `HUNG_GRACE` 的 CRIT 预警 / 自愈动作 / 自愈失败 / 触发限流 / 检测到外部重启 / 真发过告警的事件补一条恢复 OK。未达告警线的虚惊（1~3 次探活失败自愈）与 2min 级"繁忙/疑似假死"（`STALL_ALERT=0` 默认）只写 journal 不发通道 |
+
+**当前状态（2026-09-18 16:25）**：容器 Up、`/health` 200、watchdog 判 `healthy`，**并发上限已从 8 收到 4**（修复 DFlash2 缓冲区越界，见下）；策略触发的重启会以 `[WARN]` 告警并带 `RestartCount`（>0 = 刚崩过一次）。
+
+**⚠️ 告警降噪（2026-10-29）**：运行头 45 天 alerts.log 累计 1117 条，其中 **987 条是未达告警线的"恢复"虚惊播报**（长 prefill 期 `/health` 偶发超时 30~50s 自愈），日均 ~10 条刷屏 Hermes/Discord。修复：恢复播报加"真发过告警"门槛 + `STALL_ALERT=0` 把 2min 级 WARN 降为 journal-only（CRIT 预警/自动重启/限流链路不变）；`dgx-health-monitor` 同步修复（hung task 同事件去重、断网不再每小时重复）。改后日告警 ≈0，只留真事故。复盘与踩坑：[notes/qwen38-watchdog-denoise-20261029.md](notes/qwen38-watchdog-denoise-20261029.md)
+
+**⚠️ 同一 bug 的复发与定案（2026-09-17~18）**：DFlash2 形态又崩 3 次（09-17 15:14 / 15:24、09-18 约 16:01），**纯重启无效**（恢复后 2 分 16 秒即复发）。读源码定案：草稿采样器缓冲区尺寸取自 **decode CUDA graph 的 max bs**（= `--cuda-graph-max-bs-decode` = 4），而调度器允许 8 个请求同时在跑 → decode batch ≥5 时 `greedy_mask[:bs].copy_` 越界 → scheduler 自杀。修复：`--max-running-requests 4`（+ mamba 池 96→48），重建容器后 8 并发压测通过（running 峰值恰好 4、8/8 全 200、异常 0）。完整复盘与回滚：[notes/qwen38-dflash2-crash-20260918.md](notes/qwen38-dflash2-crash-20260918.md)。护栏本身（watchdog）在此期间表现正常：崩溃由 ① 策略自动拉起，冷启动期间 watchdog 判 `warming` 未插手。
+
+```bash
+# 状态与日志
+systemctl --user status qwen38-watchdog
+journalctl --user -u qwen38-watchdog -f
+~/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.sh --status
+
+# 单轮检查 / 演练（演练不碰容器）
+~/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.sh --once
+DRY_RUN=1 HEALTH_URL=http://127.0.0.1:9/health ALERT_CMD=cat STATE_DIR=/tmp/wd \
+  ~/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.sh --once
+
+# 配置（探活间隔 / 自愈限流 / 告警通道）：样例见 qwen38-sglang/qwen38-watchdog.env.example
+$EDITOR ~/.config/qwen38-watchdog.env
+
+# 维护窗口（两步都要做）：a) 关掉 watchdog 自愈  b) 人工 stop（unless-stopped 语义保证不会被 docker 拉起）
+~/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.sh --maintenance on
+~/projects/dgx-spark-notes/qwen38-sglang/stop.sh
+# …维护结束后
+~/projects/dgx-spark-notes/qwen38-sglang/qwen38-watchdog.sh --maintenance off
+```
+
+**崩溃现场留存**：watchdog 每次自愈前会把容器状态 + 崩溃前 400 行日志写到
+`~/.local/state/qwen38-watchdog/incidents/<时间>-<原因>.log`，事后查 traceback 不用再翻 docker json-file。
+
+**重建容器也要保留护栏**：`start.sh` / `start-dspark-long.sh` 的 `docker run` 已带 `--restart unless-stopped`（此前重建会丢掉自愈能力，等于护栏失效）。

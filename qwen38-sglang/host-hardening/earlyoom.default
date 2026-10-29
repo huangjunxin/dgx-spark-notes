@@ -1,0 +1,16 @@
+# /etc/default/earlyoom — DGX Spark (GB10, 128GB 统一内存) 2026-09-30
+#
+# 为什么需要:
+#   GB10 是统一内存(CPU/GPU 同一物理池), cgroup 对 CUDA 分配几乎失明
+#   (实测: 10.7GB 显存分配只被 cgroup 计到 377MB), 所以 --memory 100g 这类
+#   docker 限制拦不住真正的内存爆炸; 一旦吃干就会整机 livelock 只能断电。
+#   内核 OOM killer 往往不够快/选错人, earlyoom 是最后一道闸。
+#
+# 策略: "宁可早杀 python, 绝不碰 systemd/sshd/dockerd"
+#   -m 3  空闲内存 < 3%  即触发
+#   -s 20 空闲 swap < 20% 也触发 (本机 swap 15GB)
+#   -r 60 每 60 秒报一次状态到 journal
+#   --prefer: 优先杀 AI 推理进程 (它们才是吃内存的)
+#   --avoid : 绝不杀登录/容器/代理进程, 否则会失去远程恢复能力
+#   (earlyoom 需要 CAP_KILL; Ubuntu 包的 systemd unit 已含 AmbientCapabilities=CAP_KILL)
+EARLYOOM_ARGS="-r 60 -m 3 -s 20 --prefer '(^|/)(python3?|sglang|triton|pt_main_thread)( |$)' --avoid '(^|/)(systemd|sshd|dockerd|containerd|switchyard-server|dbus-daemon)( |$)'"

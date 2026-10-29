@@ -31,6 +31,12 @@ def main():
     ap.add_argument("--dflash2", action="store_true",
                     help="针对 DFlash2 草稿 (本地 dflash2-draft 目录): 把 YaRN 烧进它自己的 config "
                          "(= hasso5703 patch-yarn.py / incoai #8 的做法)")
+    ap.add_argument("--dflash2-dir", default=DFLASH2_DIR,
+                    help=f"DFlash2 草稿源目录 (默认 {DFLASH2_DIR})。换草稿换代时指向新目录, "
+                         "如 <cache>/dflash2-nvfp4-draft")
+    ap.add_argument("--dflash2-prefix", default="qwen38-dflash2",
+                    help="DFlash2 变体名前缀 (默认 qwen38-dflash2)。换草稿时用不同前缀, "
+                         "以便与旧草稿的变体并存、便于回滚")
     ap.add_argument("--draft-keep-rope", action="store_true",
                     help="只把草稿的 max_position_embeddings 抬到目标长度, rope 保持训练值不动 "
                          "(= hasso5703/dgx-spark-qwen38 patch-yarn.py 对草稿做的事的保守版)")
@@ -44,14 +50,16 @@ def main():
         args.draft = True
     repo_id = SRC_DRAFT if args.draft else SRC_TARGET
     if args.dflash2:
-        prefix = "qwen38-dflash2"
+        prefix = args.dflash2_prefix
     elif args.draft_keep_rope:
         prefix = "qwen38-dspark-maxpos"
     else:
         prefix = "qwen38-dspark" if args.draft else "qwen38-nvfp4"
     name = args.name or f"{prefix}-yarn{round(args.context/1024)}"
     if args.dflash2:
-        snap = DFLASH2_DIR
+        snap = args.dflash2_dir
+        if not os.path.isfile(os.path.join(snap, "config.json")):
+            raise SystemExit(f"DFlash2 草稿目录无效 (缺 config.json): {snap}")
     else:
         repo_dir = os.path.join(CACHE, "hub", "models--" + repo_id.replace("/", "--"))
         snap = glob.glob(os.path.join(repo_dir, "snapshots", "*"))[0]

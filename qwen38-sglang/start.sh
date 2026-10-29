@@ -47,8 +47,10 @@ mkdir -p "${HF_CACHE}" "${TRITON_CACHE}"
 echo "启动 SGLang: ${MODEL_ID} + DSpark(${DRAFT_ID})"
 echo "监听 ${HOST}:${PORT}  served-model-name=${SERVED_MODEL_NAME}  并发=${MAX_CONCURRENT_REQUESTS} (mamba池=${MAMBA_CACHE_SIZE})"
 
+# 崩溃自愈：SGLang scheduler 异常时容器会以 exit 0 结束，on-failure 不会触发，必须 unless-stopped
 docker run -d \
   --name "${CONTAINER_NAME}" \
+  --restart unless-stopped \
   --network host \
   --ipc host \
   --privileged \
