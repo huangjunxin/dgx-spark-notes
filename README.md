@@ -1,7 +1,7 @@
 # DGX Spark 玩机与部署记录
 
 > 主机：`spark-XXXX` · NVIDIA DGX Spark（GB10 / SM121，128 GB 统一内存，aarch64，Ubuntu 24.04，内核 6.17-nvidia，CPU 20 核 = 10×Cortex-X5 + 10×A725）
-> 本仓库记录 2026-08 ~ 2026-09 在这台机器上的模型服务部署方案、切换 runbook、评测与踩坑经验。
+> 本仓库记录 2026-08 ~ 2026-10 在这台机器上的模型服务部署方案、切换 runbook、评测与踩坑经验。
 > 文中命令/路径为记录当时的实际环境（`/home/<user>/projects/...`），直接复用到其他机器需按注释调整。
 
 ---
@@ -21,10 +21,9 @@
 | 2026-09-15 | **⚠️ 事故：主服务静默停摆 66 分钟**（DFlash2 batch 尺寸 bug → scheduler 崩溃 → 容器 exit 0，当时 RestartPolicy=no 无自愈）；恢复后加装 **restart 策略 + watchdog 探活自愈 + 告警** 三重护栏；同日 12:40 **再次复发**（真实负载 25 分钟）→ 策略自动拉起，watchdog 冷启动误判已修 | [notes/qwen38-dflash2-crash-20260915.md](notes/qwen38-dflash2-crash-20260915.md) |
 | 2026-09-15 | **★ GLM-OCR 本机部署方案（本机 OCR 首选）**：本机 vLLM 原生 glm_ocr+MTP；0.9B / 权重 MIT / SDK Apache-2.0 / OmniDocBench V1.5 #1；**版面经 SDK 的 torch 路径可上 GPU（不依赖 PaddlePaddle）**→ 比 PaddleOCR-VL-1.6 更适配 aarch64 | [notes/glm-ocr-dgx-spark-deployment.md](notes/glm-ocr-dgx-spark-deployment.md) |
 | 2026-09-15 | **★ GLM-OCR 客户端接入（实测）**：SDK 服务 `0.0.0.0:5002` + 上传网关 `:5010`；客户端 HTTP 直连传 `data:image/*;base64`（单图 2.6–4.9 s）；**发现官方 SDK 客户端传 PDF 会静默返回空**（内置服务只认 `data:image`/`file://`）→ 网关补上 `/glmocr/parse`（官方 SDK 只改 `api_url` 即可传 PDF）；含调用链拆解（网络上只有一来一回）、一键启停脚本、8 条补充踩坑 | [notes/glm-ocr-client-integration.md](notes/glm-ocr-client-integration.md) · [部署文档 §12](notes/glm-ocr-dgx-spark-deployment.md) |
+| 2026-09-15 | **★ 终端 agent 直接调用 GLM-OCR：`glm-ocr-remote` skill**（对标 [PaddleOCR-Skill](https://github.com/huangjunxin/PaddleOCR-Skill)）：装到 `~/.agents/skills`，图片/PDF 一条命令；纯标准库零依赖；内置"空结果守卫"专治 PDF 静默失败。含 `install.sh` + 实测记录，及 SKILL.md frontmatter 被 YAML 静默判死的坑 | [skills/glm-ocr-remote/](skills/glm-ocr-remote/) · [笔记 §12](notes/glm-ocr-client-integration.md) |
 | 2026-09-15 | **MinerU2.5-Pro 本机可行性：不可用**。客户端装得干净、模型也能被本机 vLLM 原生加载（qwen2_vl，2.41 GiB），**但推理输出退化成连续 !**，解析产物为空；根因是 MinerU 要求 `transformers<5` + `vllm<0.22`，本机是 5.15.1/0.27.1 | [notes/mineru-2.5-pro-dgx-spark-feasibility.md](notes/mineru-2.5-pro-dgx-spark-feasibility.md) |
 | 2026-09-17~18 | **⚠️ 事故（续）：同一 DFlash2 bug 再崩 3 次 → 源码级定案 + 修复**。读源码确认草稿采样器缓冲区尺寸 = decode CUDA graph 的 max bs（`--cuda-graph-max-bs-decode` = **4**），而并发上限是 **8** → **decode batch ≥5 必崩**（09-15 的 `a(4) vs b(7)` 与本轮 `a(4) vs b(5)` 是同一个等式；09-15 那份“缓冲区按上次 batch 复用”的解释已更正）。触发链是“长上下文风暴（单请求 70 万 token）→ 排队 → 并发顶到 5~6 → 崩”，**纯重启无效**（第 2 次崩溃距恢复仅 2 分 16 秒）。改为 **`--max-running-requests 4`**（+ mamba 池 96→48）后 8 并发压测通过：running 峰值恰好 4、8/8 全 200、异常 0 | [notes/qwen38-dflash2-crash-20260918.md](notes/qwen38-dflash2-crash-20260918.md) |
-
-| 2026-09-15 | **★ 终端 agent 直接调用 GLM-OCR：`glm-ocr-remote` skill**（对标 [PaddleOCR-Skill](https://github.com/huangjunxin/PaddleOCR-Skill)）：装到 `~/.agents/skills`，图片/PDF 一条命令；纯标准库零依赖；内置"空结果守卫"专治 PDF 静默失败。含 `install.sh` + 实测记录，及 SKILL.md frontmatter 被 YAML 静默判死的坑 | [skills/glm-ocr-remote/](skills/glm-ocr-remote/) · [笔记 §12](notes/glm-ocr-client-integration.md) |
 | 2026-10-29 | **告警降噪：Hermes 通道"沉默即健康"**。watchdog 头 45 天 1117 条告警中 **987 条是未达告警线的"恢复"虚惊播报**（长 prefill `/health` 偶发超时自愈），日均 ~10 条刷屏 Discord/hermes 上下文。修复：恢复播报加"真发过告警"门槛 + `STALL_ALERT=0` 降级 2min 级 WARN；`dgx-health-monitor` 同步修 hung task 重复告警与断网每小时催办。验证、踩坑（bash 增量读脚本/`exec 2>/dev/null` 吞 trace/ACL mask 被压/`systemctl --user` 每用户隔离/测试桩契约）见笔记 | [notes/qwen38-watchdog-denoise-20261029.md](notes/qwen38-watchdog-denoise-20261029.md) |
 | 2026-10-29 | **Qwen3.8 社区调研（纯调研零变更）**：上游三条线核查（主模型/草稿权重、架构、运行时镜像）**均无更新**，现役仍 pin 在最新；社区横评结论——现役路线（SGLang+NVFP4+DFlash2+YaRN 1M）就是 GB10 主流最优，hasso5703 ★242 与本机同草稿同上下文（其 71.4 tok/s 为 code 贪心口径，勿与 bench.py 27.0 直接比）。整理 6 项可 cherry-pick 改进（Docker 内存帽 / draft D=16 / 镜像升 v0.5.22 / 0.76 / sleep-on-idle / template 补丁），**决议：暂不更新**，留 5 条重开触发条件 | [notes/qwen38-community-survey-20261029.md](notes/qwen38-community-survey-20261029.md) |
 
