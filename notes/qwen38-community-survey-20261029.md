@@ -73,6 +73,8 @@ Docker Hub `lmsysorg/sglang:qwen38-27b` tag 当前 digest 仍为 `sha256:febfb97
 
 ### 3.3 换模型路线（想要"更优秀"时的另一条路）
 
+> **2026-10-29 晚补充：老板问询"换 Flash-Next 有什么提升"，已做逐项对比与决策口径，见 §7。**
+
 Qwen3.8-**Flash-Next**（qwen4_exp MoE）单机 GB10 方案已成熟：blazux ★484、salient-data（pinned nightly+14 patches，71.3 tok/s，GSM8K 99/100）、MiaAI-Lab（512K YaRN，48.7 prose）、hasso flash lane（176B@262K，47.9）。质量显著高于 27B（GSM8K 97+ vs 94.0），MoE 单流速度还更快。代价：本机现役 sglang 镜像不能直接加载 qwen4_exp，要走 vLLM 生态或 hasso 那种自编 sm121 kernel——**是换模型项目，不是换部署参数**。
 
 ### 3.4 跨硬件参考（记录备查）
@@ -119,6 +121,52 @@ jpezzulli/sglang-rtxpro6000（Penny Royal，SM120 RTX PRO 6000）：HiCache+NIXL
 3. 出现 Claude Code/opencode 直连 8888 的 500/400 → §3.2⑤ template 补丁；
 4. 对 code 类吞吐有真实需求 → #2（单变量 A/B）；
 5. 上游 `Qwen/Qwen3.8-27B` 或草稿仓库出新 commit / 新镜像 digest → 重跑 §2 三条线核查（复现命令见附录）。
+
+## 7. 换型决策对比：27B → Qwen3.8-Flash-Next（2026-10-29 补充）
+
+> 起因：老板问"如果换的话跟现在相比有什么提升"。本节为可直接转发的对比口径。
+
+### 7.1 官方 config 核查（Qwen/Qwen3.8-Flash-Next）
+
+| 项 | 值 |
+|---|---|
+| 架构 | `Qwen4ExpForConditionalGeneration` / `qwen4_exp`（新架构，**sglang 官方镜像不支持**） |
+| 原生窗口 | **262,144**（无 rope_scaling；1M 全靠社区 mmap/YaRN trick） |
+| 规模 | ~176B MoE = 125B 主干 + 51B PLE n-gram 表，**每 token 仅激活 6B**（512 专家取 10） |
+| 层结构 | 48 层 = 36 linear_attention + 12 full_attention（1:3 间隔；27B 是 1:4） |
+| 多模态 | `image_token_id=248056`，image-text-to-text —— **与现役 27B 持平，不丢能力** |
+
+### 7.2 GB10 单机部署可行性：已成熟（vLLM 路线为主）
+
+| 方案 | 要点 |
+|---|---|
+| **blazux/qwen3.8-Flash-DGX**（★484） | 一条龙 `flash doctor/setup/serve`；官方 NVIDIA NVFP4（124GiB）+ **48GiB PLE 表 mmap 到 NVMe** → 权重驻留 ~75GiB；推荐档 **500K 上下文**（KV 池 505-520K）；~34 tok/s 单流、prefill 2,700-4,000 tok/s；修复两个 GB10 专属 bug（prefix-cache 命中恢复全零 Mamba 态、稀疏注意力 top-k 丢候选）；hybrid 档 +20% 解码 |
+| sayyidfareed/…-1m | **989,801 token 实测通过**（5/5 针召回），KV 1,095,163；blazux 基础上加 PLE 页回收（clean page 先让给 KV），解码 26.7 tok/s |
+| MiaAI-Lab（Flash-Next 单机版） | 512K YaRN，48.7 tok/s prose 单流 / **162.9 @8 流** |
+| salient-data | pinned nightly+14 patches，71.3 tok/s，GSM8K 99/100 |
+| hasso5703 flash lane | 唯一 **SGLang 路线**（自编 sm121 qwen4_exp kernel：`qwen_sparse_attn`+`qwen38_qsa_sm121`），176B@262K 47.9 tok/s |
+
+### 7.3 逐项对比（可直接转发）
+
+| 维度 | 现役 27B | Flash-Next（GB10 单机） | 结论 |
+|---|---|---|---|
+| 质量 | GSM8K 94.0% | GSM8K **97.4~99%**、MMLU 90.8%、HumanEval 95.7~98.2%；agent/工具调用更强 | ⬆️ **核心收益** |
+| 单流解码 | 27.0 tok/s（自家 bench） | 34~49 常见档，优化档 68~88 | ⬆️ +30~80% |
+| 长文预填 | 未测（dense 计算量 4 倍+） | 实测 2,700~4,000 tok/s | ⬆️ 长文档/批量显著 |
+| 并发 | 锁死 4 路（崩溃教训） | 8 流聚合 ~163 tok/s | ⬆️ 上限更高 |
+| 上下文 | **1,010,000**（自烧 YaRN 已验证） | 原生 256K；500K 舒适档；1M 需 trick 且掉速 | ➡️ **不提升** |
+| 1M 满载速度 | ~27 tok/s | 26.7 tok/s（989,801 实测） | ➡️ 持平 |
+| 多模态 | 已启用 | 同支持 | ➡️ 持平 |
+| 显存 | 21GB 权重 + 1.5GB 草稿，宿主余 ~29GB，embeddinggemma 等共存 | checkpoint 124GiB，**整机池独占**（hasso flash lane 0.85 + 110g 硬帽） | ⬇️ 共存服务全挤掉 |
+| 稳定风险 | 29 天零事故，watchdog 成熟 | vLLM 补丁链，坑已被社区踩平但对新人仍是新的 | ⬇️ 重走一遍 9 月稳定化 |
+
+### 7.4 决策口径
+
+> **换 Flash-Next = 花一台整机的资源，买"更聪明"（GSM8K +3~5 分、代码/agent 上一档）与更高吞吐上限；上下文不会变长（现役已是 1M），速度提升中规中矩，且本机将无法再跑其他服务。**
+
+- **若目标为质量/复杂 agent**：值得立项，走 blazux 方案（风险最低）；成本 = 整机独占 + 引擎 sglang→vLLM + watchdog 重新接线 + 预留 1~2 周稳定化窗口。
+- **若只要更快**：先做现役 draft D=16 的 A/B（社区数据 +14.5%，一行参数），几乎零成本。
+- **不可并存**：128GB 放不下第二套权重；"平时 27B、关键任务切 Flash"只能走 lane 轮换（hasso cockpit 模式，单次加载 3-4 分钟）。
 
 ## 附录 A：核查方法（可复现）
 
